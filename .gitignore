@@ -1,0 +1,8 @@
+node_modules/
+# Sessão do navegador, config e logs ficam só na máquina do usuário (~/.wifi-autologin), mas por garantia:
+browser-profile/
+*.log
+.env
+.DS_Store
+Thumbs.db
+config.json

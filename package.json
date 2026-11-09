@@ -1,0 +1,19 @@
+{
+  "name": "wifi-autologin",
+  "version": "1.0.0",
+  "description": "Mantém a conexão Wi-Fi e faz login automático em portais cativos (SSO Microsoft), no macOS e no Windows",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "setup": "node src/login.mjs --setup",
+    "login": "node src/login.mjs",
+    "start": "node src/watchdog.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.65.0"
+  }
+}
