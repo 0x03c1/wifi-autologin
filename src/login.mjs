@@ -10,7 +10,7 @@ import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { PROBE_URL, PROFILE_DIR, DEFAULT_BUTTONS, TERMS_CHECKBOX, SSO_HOSTS, matchPortal } from './config.mjs';
+import { PROBE_URL, PROFILE_DIR, DEFAULT_BUTTONS, TERMS_CHECKBOX, SSO_HOSTS, classifyPortal } from './config.mjs';
 
 const log = (...a) => console.log(new Date().toLocaleString('sv-SE'), ...a);
 const CLICKABLE = 'button, a, input[type=submit], input[type=button], [role=button]';
@@ -95,9 +95,9 @@ async function run({ headless, setup }) {
       return true;
     }
 
-    const portal = matchPortal(page.url() + (await page.content().catch(() => '')));
-    if (portal === null) { log('portal não está na lista de config.json — ignorando:', page.url()); return false; }
-    const steps = portal.steps?.length ? portal.steps : DEFAULT_BUTTONS;
+    const { action, portal } = classifyPortal(page.url() + (await page.content().catch(() => '')));
+    if (action === 'ignore') { log('portal ignorado pela configuração:', page.url()); return false; }
+    const steps = portal?.steps?.length ? portal.steps : DEFAULT_BUTTONS;
 
     const deadline = Date.now() + (headless ? 60000 : 300000); // com janela: 5 min para senha/MFA
     let lastClick = 0;

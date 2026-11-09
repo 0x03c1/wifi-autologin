@@ -4,7 +4,7 @@
 //  - registra quedas/retornos em ~/.wifi-autologin/watchdog.log.
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
-import { BASE_DIR, LOG_FILE, PROBE_URL, CHECK_INTERVAL_MS, matchPortal } from './config.mjs';
+import { BASE_DIR, LOG_FILE, PROBE_URL, checkIntervalMs, classifyPortal } from './config.mjs';
 import { login } from './login.mjs';
 
 mkdirSync(BASE_DIR, { recursive: true });
@@ -27,7 +27,7 @@ async function probe() {
     const r = await fetch(PROBE_URL, { redirect: 'manual', signal: AbortSignal.timeout(6000) });
     const body = await r.text().catch(() => '');
     if (r.status === 200 && body.includes('Success')) return 'online';
-    return matchPortal((r.headers.get('location') ?? '') + body) === null ? 'ignored' : 'portal';
+    return classifyPortal((r.headers.get('location') ?? '') + body).action === 'ignore' ? 'ignored' : 'portal';
   } catch { return 'offline'; }
 }
 
@@ -43,7 +43,7 @@ async function tick() {
     const s = await probe();
     if (s === 'online' && state !== 'online') { say('online'); failures = 0; nextAttempt = 0; }
     if (s === 'offline' && state !== 'offline') say('sem rede (Wi-Fi desconectado ou acordando)');
-    if (s === 'ignored' && state !== 'ignored') say('portal fora da lista do config.json — ignorando');
+    if (s === 'ignored' && state !== 'ignored') say('portal ignorado pela configuração');
     if (s === 'portal' && Date.now() >= nextAttempt) {
       say(`portal cativo detectado → login (MAC ${currentMac()})`);
       const ok = await login().catch(e => { say('erro no login: ' + e.message); return false; });
@@ -54,5 +54,6 @@ async function tick() {
     state = s;
   } finally { busy = false; }
 }
-await tick();
-setInterval(tick, CHECK_INTERVAL_MS);
+// O intervalo é relido a cada ciclo (config.json pode mudar sem reiniciar o vigia).
+async function loop() { await tick(); setTimeout(loop, checkIntervalMs()); }
+loop();
