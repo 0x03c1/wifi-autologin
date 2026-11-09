@@ -1,0 +1,9 @@
+{
+  "portals": [
+    {
+      "match": "portal.exemplo.edu.br",
+      "steps": ["Login Microsoft", "Continue"]
+    }
+  ],
+  "checkIntervalSeconds": 10
+}
