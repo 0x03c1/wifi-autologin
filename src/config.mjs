@@ -22,7 +22,7 @@ export const USER_CONFIG = join(BASE_DIR, 'config.json');
 
 // URL de teste de portal cativo. Responde "Success" quando a internet está liberada;
 // atrás de um portal, a rede intercepta e redireciona para a página de login.
-export const PROBE_URL = 'http://captive.apple.com/hotspot-detect.html';
+export const PROBE_URL = process.env.WIFI_AUTOLOGIN_PROBE || 'http://captive.apple.com/hotspot-detect.html';
 
 // Textos de botão tentados quando o portal não tem "steps" próprios (ordem = prioridade).
 export const DEFAULT_BUTTONS = [
