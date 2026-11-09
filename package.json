@@ -14,6 +14,7 @@
     "start": "node src/watchdog.mjs"
   },
   "dependencies": {
+    "@napi-rs/keyring": "^1.3.0",
     "playwright-core": "^1.65.0"
   }
 }
