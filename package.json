@@ -11,7 +11,9 @@
   "scripts": {
     "setup": "node src/login.mjs --setup",
     "login": "node src/login.mjs",
-    "start": "node src/watchdog.mjs"
+    "start": "node src/watchdog.mjs",
+    "learn": "node src/login.mjs --learn",
+    "portals": "node src/manage.mjs list"
   },
   "dependencies": {
     "@napi-rs/keyring": "^1.3.0",
