@@ -2,6 +2,7 @@
 //  - com internet liberada, a checagem periódica serve de keepalive (evita queda por inatividade);
 //  - se um portal cativo interceptar, roda o login automático;
 //  - registra quedas/retornos em ~/.wifi-autologin/watchdog.log.
+import { execFileSync } from 'node:child_process';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import { BASE_DIR, LOG_FILE, PROBE_URL, checkIntervalMs, classifyPortal } from './config.mjs';
@@ -14,11 +15,30 @@ const origLog = console.log;
 console.log = (...a) => { origLog(...a); append(a.join(' ')); };
 const say = (line) => console.log(`${new Date().toLocaleString('sv-SE')} ${line}`);
 
+// MAC da interface Wi-Fi (o que o portal enxerga), só para diagnóstico no log.
+// No macOS o Node recebe o MAC mascarado (02:00:00:00:00:00), então lê pelo ifconfig do dispositivo Wi-Fi.
+let wifiDevice;
+function macWifiDevice() {
+  if (wifiDevice) return wifiDevice;
+  try {
+    const out = execFileSync('networksetup', ['-listallhardwareports'], { encoding: 'utf8' });
+    wifiDevice = out.match(/Hardware Port: (?:Wi-Fi|AirPort)\s*\nDevice: (\S+)/)?.[1];
+  } catch {}
+  return (wifiDevice ||= 'en0');
+}
+const MASKED = /^(00:00:00:00:00:00|02:00:00:00:00:00)$/;
 function currentMac() {
-  for (const list of Object.values(networkInterfaces())) {
-    for (const i of list ?? []) if (!i.internal && i.family === 'IPv4' && i.mac !== '00:00:00:00:00:00') return i.mac;
-  }
-  return '?';
+  try {
+    if (process.platform === 'darwin') {
+      const out = execFileSync('ifconfig', [macWifiDevice()], { encoding: 'utf8' });
+      return out.match(/ether ([0-9a-f:]{17})/i)?.[1] ?? '?';
+    }
+    const ifs = networkInterfaces();
+    const wifi = Object.keys(ifs).find(n => /wi-?fi|wireless|wlan|sem fio|^wl/i.test(n));
+    const pick = (wifi ? ifs[wifi] : Object.values(ifs).flat())
+      .find(i => !i.internal && i.mac && !MASKED.test(i.mac));
+    return pick?.mac ?? '?';
+  } catch { return '?'; }
 }
 
 // online | portal | ignored | offline
