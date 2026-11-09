@@ -46,10 +46,14 @@ async function tick() {
     if (s === 'ignored' && state !== 'ignored') say('portal ignorado pela configuração');
     if (s === 'portal' && Date.now() >= nextAttempt) {
       say(`portal cativo detectado → login (MAC ${currentMac()})`);
-      const ok = await login().catch(e => { say('erro no login: ' + e.message); return false; });
+      const status = await login().catch(e => { say('erro no login: ' + e.message); return 'error'; });
+      const ok = status === 'online' || status === 'ignored';
       failures = ok ? 0 : failures + 1;
-      // Se falhar repetidamente, espaça as tentativas (20s, 40s, 80s... até 5 min) para não abrir janelas sem parar.
-      nextAttempt = ok ? 0 : Date.now() + Math.min(10_000 * 2 ** failures, 300_000);
+      // Janela fechada sem login: você não quer entrar agora; só tenta de novo em 30 min.
+      // Outras falhas: espaça as tentativas (20s, 40s, 80s... até 5 min) para não abrir janelas sem parar.
+      nextAttempt = ok ? 0
+        : status === 'dismissed' ? Date.now() + 30 * 60_000
+        : Date.now() + Math.min(10_000 * 2 ** failures, 300_000);
     }
     state = s;
   } finally { busy = false; }
