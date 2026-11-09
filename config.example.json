@@ -5,5 +5,7 @@
       "steps": ["Login Microsoft", "Continue"]
     }
   ],
+  "learn": true,
+  "ignore": ["hotspot.exemplo.com"],
   "checkIntervalSeconds": 10
 }
