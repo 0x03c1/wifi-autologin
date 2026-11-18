@@ -5,7 +5,7 @@
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
-import { BASE_DIR, LOG_FILE, PROBE_URL, checkIntervalMs, classifyPortal } from './config.mjs';
+import { BASE_DIR, LOG_FILE, PROBE_URL, checkIntervalMs, classifyPortal, hostOf } from './config.mjs';
 import { login } from './login.mjs';
 
 mkdirSync(BASE_DIR, { recursive: true });
@@ -42,15 +42,26 @@ function currentMac() {
 }
 
 // online | portal | ignored | offline
+// Guarda em lastIntercept um resumo do que a rede devolveu no lugar do "Success" (para o log).
+let lastIntercept = '';
 async function probe() {
   try {
     const r = await fetch(PROBE_URL, { redirect: 'manual', signal: AbortSignal.timeout(6000) });
     const body = await r.text().catch(() => '');
     if (r.status === 200 && body.includes('Success')) return 'online';
-    return classifyPortal((r.headers.get('location') ?? '') + body).action === 'ignore' ? 'ignored' : 'portal';
+    const loc = r.headers.get('location') ?? '';
+    const title = body.match(/<title[^>]*>([^<]{0,80})/i)?.[1]?.trim() ?? '';
+    const where = loc ? `→ ${hostOf(loc) || loc.slice(0, 80)}`
+      : /http-equiv=["']?refresh|location\.(href|replace)/i.test(body) ? 'redirecionamento na página' : 'página no lugar';
+    lastIntercept = `HTTP ${r.status} ${where}${title ? ` "${title}"` : ''}, ${body.length} bytes`;
+    return classifyPortal(loc + body).action === 'ignore' ? 'ignored' : 'portal';
   } catch { return 'offline'; }
 }
 
+// Logo depois de conectar, a rede às vezes intercepta por alguns minutos e depois se libera sozinha.
+// Nesse período o vigia insiste sem janela; só passado PATIENCE_MS ele abre a janela para você.
+const PATIENCE_MS = (Number(process.env.WIFI_AUTOLOGIN_PATIENCE) || 300) * 1000; // segundos; padrão 5 min
+let portalSince = 0;
 let state = '';
 let busy = false;
 let failures = 0;
@@ -64,14 +75,20 @@ async function tick() {
     if (s === 'online' && state !== 'online') { say('online'); failures = 0; nextAttempt = 0; }
     if (s === 'offline' && state !== 'offline') say('sem rede (Wi-Fi desconectado ou acordando)');
     if (s === 'ignored' && state !== 'ignored') say('portal ignorado pela configuração');
+    if (s !== 'portal') portalSince = 0;
+    else if (!portalSince) portalSince = Date.now();
     if (s === 'portal' && Date.now() >= nextAttempt) {
-      say(`portal cativo detectado → login (MAC ${currentMac()})`);
-      const status = await login().catch(e => { say('erro no login: ' + e.message); return 'error'; });
+      const patient = Date.now() - portalSince < PATIENCE_MS;
+      say(`portal cativo detectado → login (MAC ${currentMac()}; ${lastIntercept})`);
+      const status = await login({ patient }).catch(e => { say('erro no login: ' + e.message); return 'error'; });
       const ok = status === 'online' || status === 'ignored';
-      failures = ok ? 0 : failures + 1;
+      if (ok) portalSince = 0;
+      failures = ok || status === 'stuck' ? 0 : failures + 1;
+      // Sem tela de login ainda: tenta de novo em 15 s, sem janela.
       // Janela fechada sem login: você não quer entrar agora; só tenta de novo em 30 min.
       // Outras falhas: espaça as tentativas (20s, 40s, 80s... até 5 min) para não abrir janelas sem parar.
       nextAttempt = ok ? 0
+        : status === 'stuck' ? Date.now() + 15_000
         : status === 'dismissed' ? Date.now() + 30 * 60_000
         : Date.now() + Math.min(10_000 * 2 ** failures, 300_000);
     }

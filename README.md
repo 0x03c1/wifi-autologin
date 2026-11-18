@@ -40,8 +40,10 @@ Isso volta a ser pedido com frequência, e cada vez é preciso digitar tudo de n
                  │     2. clica nos botões do fluxo (Login Microsoft, Continue, Conectar...)
                  │     3. o SSO reconhece a sessão salva → internet liberada
                  │            │
+                 │            ├─ nada para clicar? (rede ainda liberando)
+                 │            │    → tenta de novo sem janela por até 5 min
                  │            └─ sessão expirou / pediu senha?
-                 │                 → notificação + janela visível para você entrar uma vez
+                 │                 → janela visível para você entrar uma vez
 ```
 
 - **Para login Microsoft, nenhuma senha é armazenada.** O que fica salvo é o cookie de sessão do SSO, no perfil do
@@ -81,8 +83,8 @@ Dê **dois cliques em `install.cmd`**. Se o SmartScreen avisar, clique em *Mais 
    Se a sua rede não usa login Microsoft, só feche a janela (ou use `--no-setup` / `-NoSetup`).
 
 Daqui em diante, quando o portal pedir login, o vigia resolve sozinho. Quando a sessão do SSO vencer
-(em geral após alguns meses, conforme a política da organização), aparece uma notificação e uma janela
-para você entrar uma vez.
+(em geral após alguns meses, conforme a política da organização), aparece uma janela
+para você entrar uma vez (no Windows, também um aviso).
 
 ### Desinstalar
 
@@ -221,7 +223,10 @@ tail -f ~/.wifi-autologin/watchdog.log
 | `sem rede` | Wi-Fi desconectado ou computador acordando (normal) |
 | `portal cativo detectado → login` → `clicou: …` → `conectado ✔` | O portal pediu login e o vigia resolveu |
 | `o login (SSO) pediu credenciais` | A sessão salva expirou: entre na janela que abriu |
-| `tempo esgotado` | O portal tem um fluxo diferente: configure `steps` no `config.json` ou abra uma *issue* com o log |
+| `portal cativo detectado → login (MAC …; HTTP 200 página no lugar "…")` | O que a rede devolveu no lugar do teste: código HTTP, para onde redireciona e o título da página |
+| `nenhuma tela de login apareceu; tento de novo sem abrir janela` | A rede intercepta, mas sem tela de login. Comum logo após conectar, antes de a rede liberar sozinha: o vigia insiste sem janela por até 5 min |
+| `diagnóstico salvo em …` | URL dos frames, HTML e captura de tela do que o navegador via, em `~/.wifi-autologin/debug/` (guarda os 10 últimos) |
+| `tempo esgotado` | O portal tem um fluxo diferente: veja o diagnóstico salvo, configure `steps` no `config.json` ou abra uma *issue* com o log |
 | `portal ignorado pela configuração` | Portal fora da lista ou marcado como *Nunca*; o vigia não interfere |
 | `o portal pede usuário e senha que ainda não conheço` | Portal novo com senha: ligue o modo aprendizado ou faça o login você mesmo |
 | `preencheu o login salvo` → `conectado ✔` | Portal aprendido: o vigia entrou sozinho |
@@ -231,6 +236,10 @@ tail -f ~/.wifi-autologin/watchdog.log
 
 Se o login falhar várias vezes seguidas, o vigia espaça as tentativas (até 5 min) para não abrir janelas sem parar.
 
+O prazo em que o vigia insiste sem janela pode ser mudado com a variável `WIFI_AUTOLOGIN_PATIENCE`
+(em segundos; padrão `300`). Para testar, aponte `WIFI_AUTOLOGIN_PROBE` para um portal simulado e
+`WIFI_AUTOLOGIN_HOME` para uma pasta descartável.
+
 ## Segurança e privacidade
 
 - O repositório **não contém credenciais**, e-mails nem dados pessoais.
@@ -238,6 +247,8 @@ Se o login falhar várias vezes seguidas, o vigia espaça as tentativas (até 5 
   nunca no `config.json` nem no log. `node src/manage.mjs forget <portal>` apaga do cofre.
 - A sessão fica só no seu computador, em `~/.wifi-autologin/browser-profile`. **Não compartilhe essa pasta**:
   quem tiver ela tem acesso à sua sessão Microsoft. Para apagar, rode o desinstalador com `--purge`/`-Purge`.
+- Os diagnósticos em `~/.wifi-autologin/debug/` têm o HTML e a captura de tela da página do portal, que podem
+  mostrar seu nome ou e-mail. Ficam só no seu computador; revise antes de anexar a uma *issue*.
 - Use `portals` no `config.json` se quiser que o vigia só aja nas redes que você conhece.
 
 ## Estrutura
