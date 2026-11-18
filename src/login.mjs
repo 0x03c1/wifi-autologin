@@ -9,13 +9,33 @@
 //   node src/login.mjs --learn   -> abre janela no portal atual para aprender o login
 import { chromium } from 'playwright-core';
 import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
-import { PROBE_URL, PROFILE_DIR, DEFAULT_BUTTONS, TERMS_CHECKBOX, SSO_HOSTS, classifyPortal, hostOf, readConfig } from './config.mjs';
+import { BASE_DIR, PROBE_URL, PROFILE_DIR, DEFAULT_BUTTONS, TERMS_CHECKBOX, SSO_HOSTS, classifyPortal, hostOf, readConfig } from './config.mjs';
 import { getCredentials } from './credentials.mjs';
 import { installCapture, offerToSave } from './learn.mjs';
 
 const log = (...a) => console.log(new Date().toLocaleString('sv-SE'), ...a);
+const DEBUG_DIR = join(BASE_DIR, 'debug');
+
+// Guarda o que o navegador estava vendo (URL dos frames, HTML e captura de tela) para diagnóstico.
+// Fica só neste Mac, em ~/.wifi-autologin/debug; mantém os 10 mais recentes.
+async function snapshot(page, reason) {
+  try {
+    if (page.isClosed()) return;
+    mkdirSync(DEBUG_DIR, { recursive: true });
+    const base = join(DEBUG_DIR, new Date().toLocaleString('sv-SE').replace(/[: ]/g, '-'));
+    const frames = page.frames().map(f => '  ' + f.url()).join('\n');
+    writeFileSync(base + '.txt', `motivo: ${reason}\nurl: ${page.url()}\nframes:\n${frames}\n`);
+    writeFileSync(base + '.html', await page.content().catch(() => ''));
+    await page.screenshot({ path: base + '.png', fullPage: true, timeout: 5000 }).catch(() => {});
+    const files = readdirSync(DEBUG_DIR).sort();
+    for (const f of files.slice(0, Math.max(0, files.length - 30))) rmSync(join(DEBUG_DIR, f), { force: true });
+    log('diagnóstico salvo em', base + '.{txt,html,png}');
+  } catch { /* diagnóstico é opcional */ }
+}
 const CLICKABLE = 'button, a, input[type=submit], input[type=button], [role=button]';
 const NEVER_CLICK = /terms|termos|privacy|privacidade|política|policy|cookies|visitante|guest|voucher|cadastr|register/i;
 
@@ -26,12 +46,12 @@ export async function isOnline() {
   } catch { return false; }
 }
 
+// No macOS não há notificação: a do osascript aparece como sendo do "Editor de Script" e, ao clicar
+// nela, o macOS abre esse app. A janela do navegador, trazida para a frente, já serve de aviso.
 export function notify(message) {
   const title = 'Wi-Fi AutoLogin';
   try {
-    if (process.platform === 'darwin') {
-      spawn('osascript', ['-e', `display notification "${message}" with title "${title}"`], { stdio: 'ignore' }).unref();
-    } else if (process.platform === 'win32') {
+    if (process.platform === 'win32') {
       const ps = `(New-Object -ComObject WScript.Shell).Popup('${message}', 15, '${title}', 64)`;
       spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', ps],
         { stdio: 'ignore', detached: true, windowsHide: true }).unref();
@@ -70,14 +90,21 @@ export async function acceptTerms(scope) {
 
 // Clica no primeiro botão visível cujo texto casa com um dos padrões (em ordem de prioridade).
 // Passos definidos pelo usuário ou aprendidos são confiáveis; os padrões genéricos passam pelo filtro NEVER_CLICK.
+// Procura também dentro de iframes (portais que embutem o login num frame), exceto os do SSO.
 export async function clickNext(page, patterns, { guard = true } = {}) {
+  const scopes = typeof page.frames === 'function'
+    ? page.frames().filter(f => !SSO_HOSTS.test(f.url()))
+    : [page];
   for (const pattern of patterns) {
     const re = pattern instanceof RegExp ? pattern : new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    for (const el of await page.locator(CLICKABLE).filter({ hasText: re }).all()) {
-      const text = (await el.innerText().catch(() => '')) || (await el.getAttribute('value').catch(() => '')) || '';
-      if (!re.test(text) || (guard && NEVER_CLICK.test(text)) || !(await el.isVisible().catch(() => false))) continue;
-      await el.click().catch(() => {});
-      return text.trim();
+    for (const scope of scopes) {
+      const els = await scope.locator(CLICKABLE).all().catch(() => []);
+      for (const el of els) {
+        const text = (await el.innerText().catch(() => '')) || (await el.getAttribute('value').catch(() => '')) || '';
+        if (!re.test(text) || (guard && NEVER_CLICK.test(text)) || !(await el.isVisible().catch(() => false))) continue;
+        await el.click().catch(() => {});
+        return text.trim();
+      }
     }
   }
   return null;
@@ -119,6 +146,7 @@ async function run({ headless, setup = false, forceLearn = false }) {
   const ctx = await launch(headless);
   const capture = !headless && !setup && (cfg.learn || forceLearn) ? await installCapture(ctx) : null;
   const page = ctx.pages()[0] ?? await ctx.newPage();
+  if (!headless) await page.bringToFront().catch(() => {});
   try {
     // Abrir a URL de teste faz o portal redirecionar com os parâmetros do cliente (MAC, AP...).
     await page.goto(PROBE_URL, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
@@ -142,7 +170,7 @@ async function run({ headless, setup = false, forceLearn = false }) {
     if (!headless) log(auto ? 'janela aberta: concluindo o login' : 'janela aberta: faça o login; depois ofereço salvar');
 
     const deadline = Date.now() + (headless ? 60000 : 600000); // com janela: até 10 min
-    let lastClick = 0, fills = 0;
+    let lastClick = 0, fills = 0, acted = false, lastNav = Date.now();
     while (Date.now() < deadline) {
       if (await isOnline()) {
         log('conectado ✔');
@@ -153,6 +181,7 @@ async function run({ headless, setup = false, forceLearn = false }) {
       const url = page.url();
 
       if (SSO_HOSTS.test(url)) {
+        acted = true;
         if (headless && await page.locator('input[type=password]:visible, input[name=loginfmt]:visible').first().isVisible().catch(() => false)) {
           log('o login (SSO) pediu credenciais — sessão salva expirou');
           return 'needs-user';
@@ -169,22 +198,32 @@ async function run({ headless, setup = false, forceLearn = false }) {
           if (r === 'filled') {
             if (++fills > 2) { log('o portal recusou o login salvo (senha mudou?)'); return 'needs-user'; }
             log('preencheu o login salvo');
-            lastClick = Date.now();
-            await page.waitForTimeout(3000);
+            lastClick = Date.now(); acted = true;
+            await sleep(3000);
             continue;
           }
         } else if (await passwordFieldVisible(page)) {
           log('o portal pede usuário e senha que ainda não conheço');
+          if (headless) await snapshot(page, 'portal pede usuário e senha');
           return 'needs-user';
         }
-        await acceptTerms(page);
+        for (const frame of page.frames()) if (!SSO_HOSTS.test(frame.url())) await acceptTerms(frame);
         const clicked = await clickNext(page, steps, { guard });
-        if (clicked) { log('clicou:', clicked); lastClick = Date.now(); }
+        if (clicked) { log('clicou:', clicked); lastClick = lastNav = Date.now(); acted = true; }
+        // Parado na URL de teste sem nada para clicar: logo após conectar, a controladora às vezes
+        // intercepta antes de liberar ou de redirecionar. Recarrega para pegar o redirecionamento.
+        else if (headless && hostOf(url) === hostOf(PROBE_URL) && Date.now() - lastNav > 15000) {
+          lastNav = Date.now();
+          await page.goto(PROBE_URL, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+        }
       }
-      await page.waitForTimeout(1500);
+      await sleep(1500); // não usa page.waitForTimeout: ele lança erro se você fechar a janela
     }
     log('tempo esgotado, URL atual:', page.url());
-    return (await isOnline()) ? 'online' : 'timeout';
+    if (await isOnline()) return 'online';
+    if (headless) await snapshot(page, acted ? 'tempo esgotado após interagir' : 'nada para clicar');
+    // Sem tela de login reconhecível (nada clicado, sem SSO, sem senha): não é caso de chamar você.
+    return headless && !acted ? 'stuck' : 'timeout';
   } finally {
     await ctx.close().catch(() => {});
   }
@@ -192,7 +231,10 @@ async function run({ headless, setup = false, forceLearn = false }) {
 
 export { run as attempt }; // usado nos testes
 
-export async function login({ setup = false, forceLearn = false } = {}) {
+// patient = true (usado pelo vigia nos primeiros minutos de cada portal): se a tentativa sem janela
+// não achou tela de login nenhuma, devolve 'stuck' em vez de abrir janela — a rede costuma se liberar
+// sozinha logo depois de conectar, e a janela só atrapalha.
+export async function login({ setup = false, forceLearn = false, patient = false } = {}) {
   if (setup) {
     log('Modo setup: faça login na janela e marque "Sim" em "Manter conectado?"');
     return run({ headless: false, setup: true });
@@ -201,6 +243,7 @@ export async function login({ setup = false, forceLearn = false } = {}) {
     const status = await run({ headless: true });
     if (status === 'online' || status === 'ignored') return status;
     if (await isOnline()) return 'online';
+    if (status === 'stuck' && patient) { log('nenhuma tela de login apareceu; tento de novo sem abrir janela'); return 'stuck'; }
   }
   const learning = forceLearn || readConfig().learn;
   notify(learning ? 'Faça o login na janela; depois ofereço salvar para as próximas vezes' : 'Conclua o login na janela que abriu');
